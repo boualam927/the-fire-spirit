@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>The fire spirit </title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: 'Arial Black', sans-serif;
+        }
+        canvas {
+            display: block;
+        }
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            font-size: 18px;
+            background-color: rgba(0, 0, 0, 0.7);
+            padding: 10px;
+            border-radius: 10px;
+            border: 2px solid #ff4500;
+        }
+        #gameOver {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #ff0000;
+            font-size: 72px;
+            text-align: center;
+            background-color: rgba(0, 0, 0, 0.9);
+            padding: 30px;
+            border-radius: 15px;
+            border: 5px solid #ff0000;
+            display: none;
+            text-shadow: 0 0 20px #ff0000;
+            z-index: 100;
+        }
+        #powerUpBar {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 300px;
+            height: 20px;
+            background-color: rgba(255, 69, 0, 0.3);
+            border-radius: 10px;
+            overflow: hidden;
+            display: none;
+            box-shadow: 0 0 15px #ff4500;
+        }
+        #powerUpProgress {
+            height: 100%;
+            width: 100%;
+            background: linear-gradient(90deg, #ff8c00, #ff4500);
+            border-radius: 10px;
+        }
+        #pauseButton {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            color: white;
+            font-size: 20px;
+            background-color: rgba(255, 69, 0, 0.7);
+            padding: 10px 15px;
+            border-radius: 10px;
+            cursor: pointer;
+            border: 2px solid #ff4500;
+        }
+        #difficulty {
+            position: absolute;
+            top: 60px;
+            left: 10px;
+            color: white;
+            font-size: 16px;
+            background-color: rgba(0, 0, 0, 0.7);
+            padding: 8px;
+            border-radius: 10px;
+            border: 1px solid #ff4500;
+        }
+        .skull {
+            font-size: 40px;
+            margin: 0 10px;
+        }
+        #audioContainer {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+    <div id="ui">
+        SCORE: <span id="score">0</span> | 
+        RECORD: <span id="highScore">0</span>
+    </div>
+    <div id="difficulty">
+        NIVEAU: <span id="level">1</span> | 
+        VITESSE: <span id="speed">x1.0</span>
+    </div>
+    <div id="pauseButton">⏸ PAUSE</div>
+    <div id="gameOver">
+        <div class="skull">💀</div>GAME OVER<div class="skull">💀</div><br>
+        <span style="font-size: 24px;">APPUIE SUR ESPACE</span>
+    </div>
+    <div id="powerUpBar">
+        <div id="powerUpProgress"></div>
+    </div>
+
+    <div id="audioContainer">
+        <audio id="deathSound" src="https://assets.mixkit.co/sfx/preview/mixkit-monster-growl-1938.mp3" preload="auto"></audio>
+        <audio id="breakSound" src="https://assets.mixkit.co/sfx/preview/mixkit-ice-break-1764.mp3" preload="auto"></audio>
+        <audio id="powerupSound" src="https://assets.mixkit.co/sfx/preview/mixkit-energy-short-circuit-2580.mp3" preload="auto"></audio>
+    </div>
+
+    <script>
+        // Configuration de base modifiée pour plus de difficulté
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        // Paramètres du jeu - Version difficile
+        const PLAYER_SIZE = 40;
+        const SPIKE_WIDTH = 55;   // Augmenté de 35 à 55
+        const SPIKE_HEIGHT = 85;  // Augmenté de 60 à 85
+        const PLAYER_SPEED = 7;
+        const JUMP_FORCE = 16;
+        const GRAVITY = 0.9;
+        const BASE_SPIKE_SPEED = 6;  // Augmenté de 5 à 6
+        const POWERUP_SIZE = 35;
+        const POWERUP_DURATION = 3000; // Réduit de 3500 à 3000
+        const PARTICLE_COUNT = 150;
+        const DIFFICULTY_INTERVAL = 5000; // Réduit de 8000 à 5000
+
+        // État du jeu
+        let player = {
+            x: canvas.width / 2 - PLAYER_SIZE / 2,
+            y: canvas.height - PLAYER_SIZE - 20,
+            velY: 0,
+            isJumping: false,
+            hasPowerUp: false,
+            powerUpTime: 0
+        };
+
+        let spikes = [];
+        let powerups = [];
+        let particles = [];
+        let score = 0;
+        let highScore = localStorage.getItem('highScore') || 0;
+        let gameOver = false;
+        let gamePaused = false;
+        let lastTime = 0;
+        let spawnTimer = 0;
+        let powerupTimer = 0;
+        let difficultyTimer = 0;
+        let currentLevel = 1;
+        let currentSpeed = BASE_SPIKE_SPEED;
+        let spikeSpawnRate = 700;
+        let shakeIntensity = 0;
+        let explosionActive = false;
+        let explosionEndTime = 0;
+
+        // Contrôles
+        const keys = {};
+        window.addEventListener('keydown', e => {
+            keys[e.key] = true;
+            if (e.key === ' ' && gameOver) resetGame();
+            if (e.key === 'Escape') togglePause();
+        });
+        window.addEventListener('keyup', e => keys[e.key] = false);
+        document.getElementById('pauseButton').addEventListener('click', togglePause);
+
+        // Fonctions de dessin (inchangées)
+        function drawPlayer() {
+            ctx.save();
+            if (shakeIntensity > 0) {
+                ctx.translate(
+                    (Math.random() - 0.5) * shakeIntensity,
+                    (Math.random() - 0.5) * shakeIntensity
+                );
+                shakeIntensity = Math.max(0, shakeIntensity - 0.8);
+            }
+            
+            ctx.translate(player.x + PLAYER_SIZE/2, player.y + PLAYER_SIZE/2);
+            
+            if (player.hasPowerUp) {
+                const time = Date.now() * 0.02;
+                ctx.beginPath();
+                for (let i = 0; i < 15; i++) {
+                    const angle = i * Math.PI * 0.13 + time;
+                    const radius = PLAYER_SIZE * 0.9 + Math.sin(time + i) * 10;
+                    const x = Math.cos(angle) * radius;
+                    const y = Math.sin(angle) * radius;
+                    if (i === 0) ctx.moveTo(x, y);
+                    else ctx.lineTo(x, y);
+                }
+                ctx.closePath();
+                
+                const flameGradient = ctx.createRadialGradient(0, 0, 5, 0, 0, PLAYER_SIZE);
+                flameGradient.addColorStop(0, '#ff4500');
+                flameGradient.addColorStop(0.7, '#ff8c00');
+                flameGradient.addColorStop(1, 'transparent');
+                ctx.fillStyle = flameGradient;
+                ctx.fill();
+            }
+            
+            const coreGradient = ctx.createRadialGradient(0, 0, 5, 0, 0, PLAYER_SIZE/2);
+            coreGradient.addColorStop(0, player.hasPowerUp ? '#ffcc00' : '#ff4500');
+            coreGradient.addColorStop(1, player.hasPowerUp ? '#ff6600' : '#cc3300');
+            ctx.fillStyle = coreGradient;
+            ctx.beginPath();
+            ctx.arc(0, 0, PLAYER_SIZE/2, 0, Math.PI * 2);
+            ctx.fill();
+            
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+            ctx.beginPath();
+            ctx.arc(-PLAYER_SIZE*0.2, -PLAYER_SIZE*0.15, PLAYER_SIZE*0.1, 0, Math.PI * 2);
+            ctx.arc(PLAYER_SIZE*0.2, -PLAYER_SIZE*0.15, PLAYER_SIZE*0.1, 0, Math.PI * 2);
+            ctx.fill();
+            
+            ctx.fillStyle = '#660000';
+            ctx.beginPath();
+            ctx.arc(-PLAYER_SIZE*0.2, -PLAYER_SIZE*0.15, PLAYER_SIZE*0.05, 0, Math.PI * 2);
+            ctx.arc(PLAYER_SIZE*0.2, -PLAYER_SIZE*0.15, PLAYER_SIZE*0.05, 0, Math.PI * 2);
+            ctx.fill();
+            
+            ctx.strokeStyle = '#660000';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.arc(0, PLAYER_SIZE*0.1, PLAYER_SIZE*0.2, 0.1 * Math.PI, 0.9 * Math.PI);
+            ctx.stroke();
+            
+            ctx.restore();
+        }
+
+        function drawSpike(spike) {
+            ctx.fillStyle = '#00f7ff';
+            ctx.beginPath();
+            ctx.moveTo(spike.x + SPIKE_WIDTH/2, spike.y + SPIKE_HEIGHT);
+            ctx.lineTo(spike.x, spike.y);
+            ctx.lineTo(spike.x + SPIKE_WIDTH, spike.y);
+            ctx.closePath();
+            ctx.fill();
+            
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            
+            ctx.fillStyle = 'rgba(200, 240, 255, 0.3)';
+            ctx.fillRect(spike.x - 5, spike.y - 10, SPIKE_WIDTH + 10, 15);
+        }
+
+        function drawPowerUp(powerup) {
+            const gradient = ctx.createRadialGradient(
+                powerup.x + POWERUP_SIZE/2,
+                powerup.y + POWERUP_SIZE/2,
+                0,
+                powerup.x + POWERUP_SIZE/2,
+                powerup.y + POWERUP_SIZE/2,
+                POWERUP_SIZE/2
+            );
+            gradient.addColorStop(0, '#ffcc00');
+            gradient.addColorStop(0.7, '#ff4500');
+            gradient.addColorStop(1, '#cc3300');
+            
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            ctx.arc(
+                powerup.x + POWERUP_SIZE/2,
+                powerup.y + POWERUP_SIZE/2,
+                POWERUP_SIZE/2,
+                0,
+                Math.PI * 2
+            );
+            ctx.fill();
+            
+            const time = Date.now() * 0.02;
+            ctx.fillStyle = 'rgba(255, 255, 100, 0.6)';
+            ctx.beginPath();
+            for (let i = 0; i < 8; i++) {
+                const angle = i * Math.PI * 0.25 + time;
+                const radius = POWERUP_SIZE/2 * (0.7 + Math.sin(time + i) * 0.3);
+                const x = powerup.x + POWERUP_SIZE/2 + Math.cos(angle) * radius;
+                const y = powerup.y + POWERUP_SIZE/2 + Math.sin(angle) * radius;
+                if (i === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+            }
+            ctx.closePath();
+            ctx.fill();
+        }
+
+        function drawParticles() {
+            particles.forEach(p => {
+                ctx.globalAlpha = p.life / 100;
+                ctx.fillStyle = p.color;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                ctx.fill();
+            });
+            ctx.globalAlpha = 1;
+        }
+
+        function createExplosion(x, y, color, big = false) {
+            if (big) {
+                explosionActive = true;
+                explosionEndTime = Date.now() + 1000;
+                try {
+                    document.getElementById('deathSound').currentTime = 0;
+                    document.getElementById('deathSound').play();
+                } catch (e) {
+                    console.log("Erreur son:", e);
+                }
+            }
+
+            const count = big ? PARTICLE_COUNT * 3 : PARTICLE_COUNT;
+            const sizeMultiplier = big ? 3 : 1;
+            
+            for (let i = 0; i < count; i++) {
+                particles.push({
+                    x: x,
+                    y: y,
+                    size: Math.random() * 8 * sizeMultiplier + 3,
+                    color: color,
+                    speedX: (Math.random() - 0.5) * 15 * (big ? 2 : 1),
+                    speedY: (Math.random() - 0.5) * 15 * (big ? 2 : 1),
+                    life: 100 + Math.random() * 100
+                });
+            }
+            
+            if (big) {
+                shakeIntensity = 30;
+                ctx.fillStyle = color;
+                ctx.globalAlpha = 0.7;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.globalAlpha = 1;
+            }
+        }
+
+        function resetGame() {
+            player = {
+                x: canvas.width / 2 - PLAYER_SIZE / 2,
+                y: canvas.height - PLAYER_SIZE - 20,
+                velY: 0,
+                isJumping: false,
+                hasPowerUp: false,
+                powerUpTime: 0
+            };
+            spikes = [];
+            powerups = [];
+            particles = [];
+            score = 0;
+            currentLevel = 1;
+            currentSpeed = BASE_SPIKE_SPEED;
+            spikeSpawnRate = 700;
+            difficultyTimer = 0;
+            gameOver = false;
+            explosionActive = false;
+            document.getElementById('gameOver').style.display = 'none';
+            document.getElementById('powerUpBar').style.display = 'none';
+            document.getElementById('score').textContent = '0';
+            document.getElementById('level').textContent = '1';
+            document.getElementById('speed').textContent = `x${(currentSpeed/BASE_SPIKE_SPEED).toFixed(1)}`;
+        }
+
+        function togglePause() {
+            gamePaused = !gamePaused;
+            document.getElementById('pauseButton').textContent = gamePaused ? "▶ PLAY" : "⏸ PAUSE";
+        }
+
+        function increaseDifficulty() {
+            currentLevel++;
+            currentSpeed = BASE_SPIKE_SPEED * (1 + currentLevel * 0.4); // Augmentation plus rapide
+            spikeSpawnRate = Math.max(200, 700 - currentLevel * 100); // Apparition plus fréquente
+            
+            const newSpikes = 2 + Math.floor(currentLevel / 2); // Plus de pics simultanés
+            for (let i = 0; i < newSpikes; i++) {
+                setTimeout(() => {
+                    spikes.push({
+                        x: Math.random() * (canvas.width - SPIKE_WIDTH),
+                        y: -SPIKE_HEIGHT - Math.random() * 200,
+                        speed: currentSpeed * (0.9 + Math.random() * 0.3)
+                    });
+                }, i * 200); // Apparition plus rapprochée
+            }
+            
+            document.getElementById('level').textContent = currentLevel;
+            document.getElementById('speed').textContent = `x${(currentSpeed/BASE_SPIKE_SPEED).toFixed(1)}`;
+        }
+
+        function checkCollision() {
+            if (!player.hasPowerUp && !explosionActive) {
+                for (const spike of spikes) {
+                    const playerCenter = {
+                        x: player.x + PLAYER_SIZE/2,
+                        y: player.y + PLAYER_SIZE/2
+                    };
+                    
+                    const spikeTop = { x: spike.x + SPIKE_WIDTH/2, y: spike.y + SPIKE_HEIGHT };
+                    const spikeLeft = { x: spike.x, y: spike.y };
+                    const spikeRight = { x: spike.x + SPIKE_WIDTH, y: spike.y };
+                    
+                    const d1 = (playerCenter.x - spikeLeft.x) * (spikeTop.y - spikeLeft.y) - 
+                              (playerCenter.y - spikeLeft.y) * (spikeTop.x - spikeLeft.x);
+                    const d2 = (playerCenter.x - spikeTop.x) * (spikeRight.y - spikeTop.y) - 
+                              (playerCenter.y - spikeTop.y) * (spikeRight.x - spikeTop.x);
+                    const d3 = (playerCenter.x - spikeRight.x) * (spikeLeft.y - spikeRight.y) - 
+                              (playerCenter.y - spikeRight.y) * (spikeLeft.x - spikeRight.x);
+                    
+                    if ((d1 <= 0 && d2 <= 0 && d3 <= 0) || (d1 >= 0 && d2 >= 0 && d3 >= 0)) {
+                        createExplosion(playerCenter.x, playerCenter.y, '#ff0000', true);
+                        setTimeout(() => {
+                            gameOver = true;
+                            document.getElementById('gameOver').style.display = 'block';
+                            if (score > highScore) {
+                                highScore = score;
+                                localStorage.setItem('highScore', highScore);
+                                document.getElementById('highScore').textContent = highScore;
+                            }
+                        }, 800);
+                        return;
+                    }
+                }
+            } else if (!explosionActive) {
+                for (let i = spikes.length - 1; i >= 0; i--) {
+                    const spike = spikes[i];
+                    const spikeCenter = {
+                        x: spike.x + SPIKE_WIDTH/2,
+                        y: spike.y + SPIKE_HEIGHT/2
+                    };
+                    const playerCenter = {
+                        x: player.x + PLAYER_SIZE/2,
+                        y: player.y + PLAYER_SIZE/2
+                    };
+                    const dx = playerCenter.x - spikeCenter.x;
+                    const dy = playerCenter.y - spikeCenter.y;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+                    
+                    if (distance < (PLAYER_SIZE/2 + SPIKE_WIDTH/2)) {
+                        createExplosion(spikeCenter.x, spikeCenter.y, '#ff9900');
+                        try {
+                            document.getElementById('breakSound').currentTime = 0;
+                            document.getElementById('breakSound').play();
+                        } catch (e) {
+                            console.log("Erreur son:", e);
+                        }
+                        spikes.splice(i, 1);
+                        score += 3 * currentLevel;
+                        document.getElementById('score').textContent = score;
+                    }
+                }
+            }
+
+            for (let i = powerups.length - 1; i >= 0; i--) {
+                const p = powerups[i];
+                const dx = (player.x + PLAYER_SIZE/2) - (p.x + POWERUP_SIZE/2);
+                const dy = (player.y + PLAYER_SIZE/2) - (p.y + POWERUP_SIZE/2);
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                
+                if (distance < (PLAYER_SIZE/2 + POWERUP_SIZE/2)) {
+                    player.hasPowerUp = true;
+                    player.powerUpTime = Date.now() + POWERUP_DURATION;
+                    document.getElementById('powerUpBar').style.display = 'block';
+                    powerups.splice(i, 1);
+                    createExplosion(p.x + POWERUP_SIZE/2, p.y + POWERUP_SIZE/2, '#ffcc00');
+                    try {
+                        document.getElementById('powerupSound').currentTime = 0;
+                        document.getElementById('powerupSound').play();
+                    } catch (e) {
+                        console.log("Erreur son:", e);
+                    }
+                }
+            }
+        }
+
+        function updateParticles() {
+            for (let i = particles.length - 1; i >= 0; i--) {
+                particles[i].x += particles[i].speedX;
+                particles[i].y += particles[i].speedY;
+                particles[i].life -= 1.5;
+                
+                if (particles[i].life <= 0) {
+                    particles.splice(i, 1);
+                }
+            }
+        }
+
+        function update(deltaTime) {
+            if (gameOver || gamePaused) return;
+
+            if (explosionActive && Date.now() > explosionEndTime) {
+                explosionActive = false;
+            }
+
+            difficultyTimer += deltaTime;
+            if (difficultyTimer > DIFFICULTY_INTERVAL) {
+                increaseDifficulty();
+                difficultyTimer = 0;
+            }
+
+            if (keys['ArrowLeft']) player.x = Math.max(50, player.x - PLAYER_SPEED);
+            if (keys['ArrowRight']) player.x = Math.min(canvas.width - PLAYER_SIZE - 50, player.x + PLAYER_SPEED);
+            if (keys[' '] && !player.isJumping) {
+                player.velY = -JUMP_FORCE;
+                player.isJumping = true;
+            }
+
+            player.velY += GRAVITY;
+            player.y += player.velY;
+
+            if (player.y > canvas.height - PLAYER_SIZE - 20) {
+                player.y = canvas.height - PLAYER_SIZE - 20;
+                player.velY = 0;
+                player.isJumping = false;
+            }
+
+            if (player.hasPowerUp) {
+                const remaining = player.powerUpTime - Date.now();
+                if (remaining <= 0) {
+                    player.hasPowerUp = false;
+                    document.getElementById('powerUpBar').style.display = 'none';
+                } else {
+                    const percent = (remaining / POWERUP_DURATION) * 100;
+                    document.getElementById('powerUpProgress').style.width = `${percent}%`;
+                }
+            }
+
+            spawnTimer += deltaTime;
+            if (spawnTimer > spikeSpawnRate) {
+                spikes.push({
+                    x: Math.random() * (canvas.width - SPIKE_WIDTH),
+                    y: -SPIKE_HEIGHT,
+                    speed: currentSpeed * (0.9 + Math.random() * 0.3)
+                });
+                spawnTimer = 0;
+            }
+
+            powerupTimer += deltaTime;
+            if (powerupTimer > 3000 + Math.random() * 2000) {
+                powerups.push({
+                    x: Math.random() * (canvas.width - POWERUP_SIZE),
+                    y: -POWERUP_SIZE,
+                    speed: currentSpeed * 0.6
+                });
+                powerupTimer = 0;
+            }
+
+            for (let i = spikes.length - 1; i >= 0; i--) {
+                spikes[i].y += spikes[i].speed;
+                if (spikes[i].y > canvas.height) {
+                    spikes.splice(i, 1);
+                    score += currentLevel;
+                    document.getElementById('score').textContent = score;
+                }
+            }
+
+            for (let i = powerups.length - 1; i >= 0; i--) {
+                powerups[i].y += powerups[i].speed;
+                if (powerups[i].y > canvas.height) powerups.splice(i, 1);
+            }
+
+            updateParticles();
+            checkCollision();
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            ctx.fillStyle = '#001a33';
+            for (let i = 0; i < 3; i++) {
+                ctx.beginPath();
+                ctx.moveTo(0, canvas.height);
+                ctx.bezierCurveTo(
+                    canvas.width * 0.2 * i, 
+                    canvas.height * 0.3,
+                    canvas.width * 0.2 * (i+1), 
+                    canvas.height * 0.7,
+                    canvas.width, 
+                    canvas.height
+                );
+                ctx.lineTo(canvas.width, 0);
+                ctx.lineTo(0, 0);
+                ctx.closePath();
+                ctx.fill();
+            }
+            
+            drawParticles();
+            spikes.forEach(drawSpike);
+            powerups.forEach(drawPowerUp);
+            drawPlayer();
+        }
+
+        function gameLoop(timestamp) {
+            if (!lastTime) lastTime = timestamp;
+            const deltaTime = timestamp - lastTime;
+            lastTime = timestamp;
+            
+            if (!gamePaused) update(deltaTime);
+            draw();
+            
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Initialisation
+        document.getElementById('highScore').textContent = highScore;
+        requestAnimationFrame(gameLoop);
+
+        // Redimensionnement
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        });
+
+        // Activation des sons au premier clic
+        window.addEventListener('click', () => {
+            try {
+                const deathSound = document.getElementById('deathSound');
+                const breakSound = document.getElementById('breakSound');
+                const powerupSound = document.getElementById('powerupSound');
+                
+                deathSound.volume = 0.7;
+                breakSound.volume = 0.5;
+                powerupSound.volume = 0.4;
+                
+                deathSound.muted = false;
+                deathSound.play().then(() => {
+                    deathSound.pause();
+                    deathSound.currentTime = 0;
+                }).catch(e => console.log("Audio error:", e));
+            } catch (e) {
+                console.log("Erreur d'initialisation audio:", e);
+            }
+        }, { once: true });
+    </script>
+</body>
+</html>
